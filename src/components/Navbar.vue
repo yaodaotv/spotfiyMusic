@@ -1,5 +1,6 @@
 <template>
   <div>
+    <DonateModal ref="donateModal" />
     <nav :class="{ 'has-custom-titlebar': hasCustomTitlebar }">
       <Win32Titlebar v-if="enableWin32Titlebar" />
       <LinuxTitlebar v-if="enableLinuxTitlebar" />
@@ -66,12 +67,10 @@
         {{ $t('library.userProfileMenu.logout') }}
       </div>
       <hr />
-      <!-- 删除GitHub入口
-      <div class="item" @click="toGitHub">
-        <svg-icon icon-class="github" />
-        {{ $t('nav.github') }}
+      <div class="item" @click="toDonate">
+        <svg-icon icon-class="gift" />
+        打赏作者
       </div>
-       -->
     </ContextMenu>
   </div>
 </template>
@@ -88,6 +87,7 @@ import Win32Titlebar from '@/components/Win32Titlebar.vue';
 import LinuxTitlebar from '@/components/LinuxTitlebar.vue';
 import ContextMenu from '@/components/ContextMenu.vue';
 import ButtonIcon from '@/components/ButtonIcon.vue';
+import DonateModal from '@/components/DonateModal.vue';
 
 export default {
   name: 'Navbar',
@@ -96,6 +96,7 @@ export default {
     LinuxTitlebar,
     ButtonIcon,
     ContextMenu,
+    DonateModal,
   },
   data() {
     return {
@@ -159,8 +160,9 @@ export default {
     toSettings() {
       this.$router.push({ name: 'settings' });
     },
-    toGitHub() {
-      window.open('https://github.com/qier222/YesPlayMusic');
+    toDonate() {
+      this.$refs.userProfileMenu.closeMenu();
+      this.$refs.donateModal.openDonateModal();
     },
     toLogin() {
       if (process.env.IS_ELECTRON === true) {
