@@ -1,0 +1,144 @@
+/* 打赏功能样式 */
+.donate-btn {
+    background: linear-gradient(135deg, var(--color-primary), var(--color-primary-bg));
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.donate-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+}
+
+.donate-btn svg {
+    margin-right: 6px;
+}
+
+/* 打赏弹窗样式 */
+.donate-modal {
+    position: fixed;
+    inset: 0;
+    background-color: rgba(0, 0, 0, 0.85);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 70;
+    transition: opacity 0.3s ease;
+}
+
+.donate-modal.show {
+    display: flex;
+    animation: fadeIn 0.3s forwards;
+}
+
+.donate-modal.hide {
+    animation: fadeOut 0.3s forwards;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes fadeOut {
+    from { opacity: 1; }
+    to { opacity: 0; }
+}
+
+.donate-container {
+    background: var(--color-secondary-bg);
+    border: 1px solid var(--color-primary);
+    border-radius: 8px;
+    padding: 24px;
+    width: 90%;
+    max-width: 480px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7), 0 0 15px rgba(0, 204, 255, 0.1);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.donate-title {
+    font-size: 24px;
+    font-weight: bold;
+    margin-bottom: 20px;
+    text-align: center;
+    color: var(--color-primary);
+}
+
+.donate-subtitle {
+    font-size: 14px;
+    color: var(--color-text);
+    margin-bottom: 24px;
+    text-align: center;
+}
+
+.donate-qrcodes {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    margin-bottom: 20px;
+    width: 100%;
+}
+
+.donate-qrcode {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.qrcode-img {
+    width: 150px;
+    height: 150px;
+    border: 4px solid white;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    background-color: white;
+}
+
+.qrcode-label {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--color-text);
+}
+
+.donate-close {
+    margin-top: 20px;
+    background: rgba(0, 204, 255, 0.1);
+    border: 1px solid rgba(0, 204, 255, 0.2);
+    color: white;
+    border-radius: 6px;
+    padding: 8px 20px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.donate-close:hover {
+    background: rgba(0, 204, 255, 0.2);
+    border-color: var(--color-primary);
+}
+
+/* 响应式调整 */
+@media (max-width: 640px) {
+    .donate-qrcodes {
+        flex-direction: column;
+        align-items: center;
+        gap: 20px;
+    }
+    
+    .qrcode-img {
+        width: 140px;
+        height: 140px;
+    }
+}
