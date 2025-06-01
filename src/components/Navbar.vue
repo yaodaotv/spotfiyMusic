@@ -66,12 +66,11 @@
         {{ $t('library.userProfileMenu.logout') }}
       </div>
       <hr />
-      <!-- 删除GitHub入口
-      <div class="item" @click="toGitHub">
-        <svg-icon icon-class="github" />
-        {{ $t('nav.github') }}
+      <!-- 添加打赏作者按钮 -->
+      <div class="item" @click="showDonateModal">
+        <svg-icon icon-class="heart" />
+        打赏作者
       </div>
-       -->
     </ContextMenu>
   </div>
 </template>
@@ -168,6 +167,10 @@ export default {
       } else {
         this.$router.push({ name: 'login' });
       }
+    },
+    // 添加打赏模态框显示方法
+    showDonateModal() {
+      this.$store.commit('toggleDonateModal', true);
     },
   },
 };
