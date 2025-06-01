@@ -46,9 +46,8 @@ export default {
     if (index === -1) {
       state.settings.playlistCategories.push(name);
     } else {
-      state.settings.playlistCategories = state.settings.playlistCategories.filter(
-        (c) => c !== name
-      );
+      state.settings.playlistCategories = 
+        state.settings.playlistCategories.filter(c => c !== name);
     }
   },
   updateToast(state, toast) {
@@ -63,7 +62,7 @@ export default {
   updateDailyTracks(state, dailyTracks) {
     state.dailyTracks = dailyTracks;
   },
-  updateShortcut(state, { id, type, shortcut }) {
+  updateShortcut(state, { id, shortcut }) {
     const newShortcut = updateShortcut(state.settings.shortcuts, id, shortcut);
     state.settings.shortcuts = newShortcut;
   },
@@ -71,7 +70,7 @@ export default {
     state.settings.shortcuts = cloneDeep(shortcuts);
   },
   updatePlayer(state, options) {
-    Object.keys(options).forEach((key) => {
+    Object.keys(options).forEach(key => {
       state.player[key] = options[key];
     });
   },
