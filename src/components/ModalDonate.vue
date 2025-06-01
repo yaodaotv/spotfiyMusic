@@ -34,8 +34,10 @@ export default {
   },
   data() {
     return {
-      wechatQRCode: 'https://5f4480c.webp.li/2025/04/83427cf17e1bf1874c5e391df35f1c9a.png',
-      alipayQRCode: 'https://5f4480c.webp.li/2025/04/3046cde05fab442e147234ec503ea9ee.png',
+      wechatQRCode:
+        'https://5f4480c.webp.li/2025/04/83427cf17e1bf1874c5e391df35f1c9a.png',
+      alipayQRCode:
+        'https://5f4480c.webp.li/2025/04/3046cde05fab442e147234ec503ea9ee.png',
     };
   },
   computed: {
@@ -126,7 +128,6 @@ export default {
     flex-direction: column;
     align-items: center;
   }
-  
   .donate-item {
     margin-bottom: 20px;
   }
