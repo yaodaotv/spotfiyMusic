@@ -46,7 +46,7 @@ export default {
     if (index === -1) {
       state.settings.playlistCategories.push(name);
     } else {
-      state.settings.playlistCategories = 
+      state.settings.playlistCategories =
         state.settings.playlistCategories.filter(c => c !== name);
     }
   },
