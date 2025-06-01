@@ -1,5 +1,5 @@
 <template>
-  <div class="modal" v-show="show" @click.self="close">
+  <div v-show="show" class="modal" @click.self="close">
     <div class="modal-content">
       <div class="modal-header">
         <h2>打赏作者</h2>
