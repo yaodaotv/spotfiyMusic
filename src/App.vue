@@ -18,15 +18,16 @@
     <Toast />
     <ModalAddTrackToPlaylist v-if="isAccountLoggedIn" />
     <ModalNewPlaylist v-if="isAccountLoggedIn" />
+    <ModalDonate />
     <transition v-if="enablePlayer" name="slide-up">
       <Lyrics v-show="showLyrics" />
     </transition>
   </div>
 </template>
-
 <script>
 import ModalAddTrackToPlaylist from './components/ModalAddTrackToPlaylist.vue';
 import ModalNewPlaylist from './components/ModalNewPlaylist.vue';
+import ModalDonate from './components/ModalDonate.vue';
 import Scrollbar from './components/Scrollbar.vue';
 import Navbar from './components/Navbar.vue';
 import Player from './components/Player.vue';
@@ -35,7 +36,6 @@ import { ipcRenderer } from './electron/ipcRenderer';
 import { isAccountLoggedIn, isLooseLoggedIn } from '@/utils/auth';
 import Lyrics from './views/lyrics.vue';
 import { mapState } from 'vuex';
-
 export default {
   name: 'App',
   components: {
@@ -44,6 +44,7 @@ export default {
     Toast,
     ModalAddTrackToPlaylist,
     ModalNewPlaylist,
+    ModalDonate,
     Lyrics,
     Scrollbar,
   },
@@ -108,13 +109,11 @@ export default {
   },
 };
 </script>
-
 <style lang="scss">
 #app {
   width: 100%;
   transition: all 0.4s;
 }
-
 main {
   position: fixed;
   top: 0;
@@ -126,17 +125,14 @@ main {
   box-sizing: border-box;
   scrollbar-width: none; // firefox
 }
-
 @media (max-width: 1336px) {
   main {
     padding: 64px 5vw 96px 5vw;
   }
 }
-
 main::-webkit-scrollbar {
   width: 0px;
 }
-
 .slide-up-enter-active,
 .slide-up-leave-active {
   transition: transform 0.4s;
