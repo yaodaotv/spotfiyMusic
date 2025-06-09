@@ -12,7 +12,7 @@
   "rewrites": [
     {
       "source": "/api/:match*",
-      "destination": "https://neteasecloudmusicapi.vercel.app/:match*"
+      "destination": "https://music.mcseekeri.com/:match*"
     }
   ]
 }
