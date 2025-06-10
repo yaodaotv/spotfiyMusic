@@ -12,7 +12,7 @@
   "rewrites": [
     {
       "source": "/api/:match*",
-      "destination": "https://netease-cloud-music-api-tau-blush-97.vercel.app/:match*"
+      "destination": "https://netease-cloud-music-api-coral-kappa.vercel.app/:match*"
     }
   ]
 }
