@@ -12,7 +12,7 @@
   "rewrites": [
     {
       "source": "/api/:match*",
-      "destination": "https://netease-cloud-music-api-zeta-five-12.vercel.app/:match*"
+      "destination": "https://163api.qijieya.cn/:match*"
     }
   ]
 }
