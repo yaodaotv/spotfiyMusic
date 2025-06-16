@@ -3,33 +3,19 @@
     <div class="section-1">
       <img src="/img/logos/yesplaymusic.png" />
       <svg-icon icon-class="x"></svg-icon>
-      <img src="/img/logos/netease-music.png" />
+      <img src="/img/logos/spotify.png" />
     </div>
     <div class="section-2">
       <div
         class="card"
         @mouseover="activeCard = 1"
         @mouseleave="activeCard = 0"
-        @click="goTo('account')"
+        @click="goTo("account")"
       >
         <div class="container" :class="{ active: activeCard === 1 }">
           <div class="title-info">
-            <div class="title">{{ $t('login.loginText') }}</div>
-            <div class="info">{{ $t('login.accessToAll') }}</div>
-          </div>
-          <svg-icon icon-class="arrow-right"></svg-icon>
-        </div>
-      </div>
-      <div
-        class="card"
-        @mouseover="activeCard = 2"
-        @mouseleave="activeCard = 0"
-        @click="goTo('username')"
-      >
-        <div class="container" :class="{ active: activeCard === 2 }">
-          <div class="title-info">
-            <div class="title">{{ $t('login.search') }}</div>
-            <div class="info">{{ $t('login.readonly') }}</div>
+            <div class="title">{{ $t("login.loginText") }}</div>
+            <div class="info">使用 Spotify 登录</div>
           </div>
           <svg-icon icon-class="arrow-right"></svg-icon>
         </div>
@@ -39,12 +25,12 @@
 </template>
 
 <script>
-import NProgress from 'nprogress';
+import NProgress from "nprogress";
 
-import SvgIcon from '@/components/SvgIcon.vue';
+import SvgIcon from "@/components/SvgIcon.vue";
 
 export default {
-  name: 'Login',
+  name: "Login",
   components: {
     SvgIcon,
   },
@@ -58,7 +44,7 @@ export default {
   },
   methods: {
     goTo(path) {
-      this.$router.push({ path: '/login/' + path });
+      this.$router.push({ path: "/login/" + path });
     },
   },
 };
@@ -149,3 +135,5 @@ export default {
   }
 }
 </style>
+
+
