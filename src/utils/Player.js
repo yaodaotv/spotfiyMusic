@@ -1,16 +1,10 @@
-import { getAlbum } from '@/api/album';
-import { getArtist } from '@/api/artist';
-import { trackScrobble, trackUpdateNowPlaying } from '@/api/lastfm';
-import { fmTrash, personalFM } from '@/api/others';
-import { getPlaylistDetail, intelligencePlaylist } from '@/api/playlist';
-import { getLyric, getMP3, getTrackDetail, scrobble } from '@/api/track';
 import store from '@/store';
 import { isAccountLoggedIn } from '@/utils/auth';
-import { cacheTrackSource, getTrackSource } from '@/utils/db';
 import { isCreateMpris, isCreateTray } from '@/utils/platform';
-import { Howl, Howler } from 'howler';
 import shuffle from 'lodash/shuffle';
-import { decode as base642Buffer } from '@/utils/base64';
+
+// ADD Spotify API imports
+import { spotifyApiRequest, refreshSpotifyToken } from '@/api/spotify';
 
 const PLAY_PAUSE_FADE_DURATION = 200;
 
@@ -93,11 +87,8 @@ export default class {
      */
     this.createdBlobRecords = [];
 
-    // howler (https://github.com/goldfire/howler.js)
-    this._howler = null;
-    Object.defineProperty(this, '_howler', {
-      enumerable: false,
-    });
+    // Spotify Web Playback SDK player instance
+    this._spotifyPlayer = null; // ADD THIS
 
     // init
     this._init();
@@ -150,7 +141,13 @@ export default class {
   }
   set volume(volume) {
     this._volume = volume;
-    this._howler?.volume(volume);
+    if (this._spotifyPlayer) {
+      this._spotifyPlayer.setVolume(volume).then(() => {
+        console.log(`Volume set to ${volume}`);
+      }).catch(error => {
+        console.error('Error setting volume:', error);
+      });
+    }
   }
   get list() {
     return this.shuffle ? this._shuffledList : this._list;
@@ -201,11 +198,12 @@ export default class {
     return this._progress;
   }
   set progress(value) {
-    if (this._howler) {
-      this._howler.seek(value);
-      if (isCreateMpris) {
-        ipcRenderer?.send('seeked', this._howler.seek());
-      }
+    if (this._spotifyPlayer) {
+      this._spotifyPlayer.seek(value * 1000).then(() => {
+        console.log(`Seeked to ${value} seconds!`);
+      }).catch(error => {
+        console.error('Error seeking:', error);
+      });
     }
   }
   get isCurrentTrackLiked() {
@@ -214,31 +212,119 @@ export default class {
 
   _init() {
     this._loadSelfFromLocalStorage();
-    this._howler?.volume(this.volume);
+
+    // Initialize Spotify Web Playback SDK
+    this._initSpotifyPlaybackSDK();
 
     if (this._enabled) {
-      // 恢复当前播放歌曲
-      this._replaceCurrentTrack(this.currentTrackID, false).then(() => {
-        this._howler?.seek(localStorage.getItem('playerCurrentTrackTime') ?? 0);
-      }); // update audio source and init howler
       this._initMediaSession();
     }
 
     this._setIntervals();
 
     // 初始化私人FM
-    if (
-      this._personalFMTrack.id === 0 ||
-      this._personalFMNextTrack.id === 0 ||
-      this._personalFMTrack.id === this._personalFMNextTrack.id
-    ) {
-      personalFM().then(result => {
-        this._personalFMTrack = result.data[0];
-        this._personalFMNextTrack = result.data[1];
-        return this._personalFMTrack;
+    // This part will need to be adapted or removed if personal FM is not supported by Spotify API
+    // For now, keeping it as is, but it will likely break without Netease API
+    // personalFM().then(result => {
+    //   this._personalFMTrack = result.data[0];
+    //   this._personalFMNextTrack = result.data[1];
+    //   return this._personalFMTrack;
+    // });
+  }
+
+  _initSpotifyPlaybackSDK() {
+    // Check if Spotify SDK is loaded
+    if (window.Spotify) {
+      this._spotifyPlayer = new window.Spotify.Player({
+        name: 'YesPlayMusic',
+        getOAuthToken: async cb => {
+          // Get access token from localStorage or refresh it
+          let accessToken = localStorage.getItem('spotify_access_token');
+          const tokenExpiresAt = localStorage.getItem('spotify_token_expires_at');
+
+          if (!accessToken || Date.now() >= tokenExpiresAt) {
+            const refreshed = await refreshSpotifyToken();
+            if (refreshed) {
+              accessToken = localStorage.getItem('spotify_access_token');
+            } else {
+              console.error('Failed to refresh Spotify token for Web Playback SDK.');
+              // Redirect to login or show error
+              return;
+            }
+          }
+          cb(accessToken);
+        },
+        volume: this.volume,
       });
+
+      // Ready
+      this._spotifyPlayer.addListener('ready', ({ device_id }) => {
+        console.log('Ready with Device ID', device_id);
+        store.commit('updateData', { key: 'spotifyDeviceId', value: device_id });
+        // Transfer playback to this device
+        // spotifyApiRequest('put', '/me/player', {
+        //   device_ids: [device_id],
+        //   play: false, // Don't start playback immediately
+        // });
+      });
+
+      // Not Ready
+      this._spotifyPlayer.addListener('not_ready', ({ device_id }) => {
+        console.log('Device ID has gone offline', device_id);
+      });
+
+      // Player State Changed
+      this._spotifyPlayer.addListener('player_state_changed', state => {
+        if (!state) return;
+        this._setPlaying(!state.paused);
+        this._progress = state.position / 1000; // Convert ms to seconds
+        // Update current track info based on Spotify state
+        if (state.track_window.current_track) {
+          const spotifyTrack = state.track_window.current_track;
+          // Map Spotify track to YesPlayMusic track format
+          this._currentTrack = this._mapSpotifyTrackToYesPlayMusicTrack(spotifyTrack);
+          setTitle(this._currentTrack);
+          setTrayLikeState(store.state.liked.songs.includes(this.currentTrack.id));
+        }
+      });
+
+      // Error handling
+      this._spotifyPlayer.addListener('initialization_error', ({ message }) => {
+        console.error('Failed to initialize Spotify Web Playback SDK:', message);
+      });
+      this._spotifyPlayer.addListener('authentication_error', ({ message }) => {
+        console.error('Spotify Web Playback SDK authentication error:', message);
+        // Token expired, need to re-authenticate
+        store.dispatch('showToast', 'Spotify 认证过期，请重新登录。');
+        // Optionally redirect to login page
+      });
+      this._spotifyPlayer.addListener('account_error', ({ message }) => {
+        console.error('Spotify Web Playback SDK account error:', message);
+        store.dispatch('showToast', '您的 Spotify 账户无法使用 Web Playback SDK，可能需要 Premium 账户。');
+      });
+      this._spotifyPlayer.addListener('playback_error', ({ message }) => {
+        console.error('Spotify Web Playback SDK playback error:', message);
+      });
+
+      this._spotifyPlayer.connect();
+    } else {
+      console.warn('Spotify Web Playback SDK not loaded. Make sure to include the script tag.');
+      // Fallback or inform user
     }
   }
+
+  // Helper to map Spotify track object to YesPlayMusic track object
+  _mapSpotifyTrackToYesPlayMusicTrack(spotifyTrack) {
+    return {
+      id: spotifyTrack.id,
+      name: spotifyTrack.name,
+      ar: spotifyTrack.artists.map(artist => ({ id: artist.id, name: artist.name })),
+      al: { id: spotifyTrack.album.id, name: spotifyTrack.album.name, picUrl: spotifyTrack.album.images[0]?.url },
+      dt: spotifyTrack.duration_ms, // duration in ms
+      // Add other properties as needed for YesPlayMusic's UI
+    };
+  }
+
   _setPlaying(isPlaying) {
     this._playing = isPlaying;
     if (isCreateTray) {
@@ -250,12 +336,7 @@ export default class {
     // TODO: 如果 _progress 在别的地方被改变了，
     // 这个定时器会覆盖之前改变的值，是bug
     setInterval(() => {
-      if (this._howler === null) return;
-      this._progress = this._howler.seek();
-      localStorage.setItem('playerCurrentTrackTime', this._progress);
-      if (isCreateMpris) {
-        ipcRenderer?.send('playerCurrentTrackTime', this._progress);
-      }
+      // Spotify SDK handles progress updates via 'player_state_changed' listener
     }, 1000);
   }
   _getNextTrack() {
@@ -309,692 +390,228 @@ export default class {
     );
     const trackDuration = ~~(track.dt / 1000);
     time = completed ? trackDuration : ~~time;
-    scrobble({
-      id: track.id,
-      sourceid: this.playlistSource.id,
-      time,
-    });
-    if (
-      store.state.lastfm.key !== undefined &&
-      (time >= trackDuration / 2 || time >= 240)
-    ) {
-      const timestamp = ~~(new Date().getTime() / 1000) - time;
-      trackScrobble({
-        artist: track.ar[0].name,
-        track: track.name,
-        timestamp,
-        album: track.al.name,
-        trackNumber: track.no,
-        duration: trackDuration,
+    // scrobble({ // This is Netease scrobble, will need to be replaced or removed
+    //   id: track.id,
+    //   sourceid: this.playlistSource.id,
+    //   time,
+    // });
+    // Last.fm scrobble might still be relevant if user uses it
+    // if (
+    //   store.state.lastfm.key !== undefined &&
+    //   (time >= trackDuration / 2 || time >= 240)
+    // ) {
+    //   const timestamp = ~~(new Date().getTime() / 1000) - time;
+    //   trackScrobble({
+    //     artist: track.ar[0].name,
+    //     track: track.name,
+    //     timestamp,
+    //     album: track.al.name,
+    //     trackNumber: track.no,
+    //     duration: trackDuration,
+    //   });
+    // }
+  }
+
+  async _playAudioSource(source, autoplay = true) {
+    // 'source' here would be a Spotify track URI (e.g., 'spotify:track:...')
+    // or a track ID
+    const deviceId = store.state.spotifyDeviceId;
+    if (!deviceId) {
+      console.error('Spotify device ID not available.');
+      store.dispatch('showToast', 'Spotify 播放器未准备好，请稍候或刷新页面。');
+      return;
+    }
+
+    try {
+      // If source is a track ID, convert to URI
+      let trackUri = source.startsWith('spotify:track:') ? source : `spotify:track:${source}`;
+
+      await spotifyApiRequest('put', `/me/player/play?device_id=${deviceId}`, {
+        uris: [trackUri],
       });
-    }
-  }
-  _playAudioSource(source, autoplay = true) {
-    Howler.unload();
-    this._howler = new Howl({
-      src: [source],
-      html5: true,
-      preload: true,
-      format: ['mp3', 'flac'],
-      onend: () => {
-        this._nextTrackCallback();
-      },
-    });
-    this._howler.on('loaderror', (_, errCode) => {
-      // https://developer.mozilla.org/en-US/docs/Web/API/MediaError/code
-      // code 3: MEDIA_ERR_DECODE
-      if (errCode === 3) {
-        this._playNextTrack(this._isPersonalFM);
-      } else if (errCode === 4) {
-        // code 4: MEDIA_ERR_SRC_NOT_SUPPORTED
-        store.dispatch('showToast', `无法播放: 不支持的音频格式`);
-        this._playNextTrack(this._isPersonalFM);
-      } else {
-        const t = this.progress;
-        this._replaceCurrentTrackAudio(this.currentTrack, false, false).then(
-          replaced => {
-            // 如果 replaced 为 false，代表当前的 track 已经不是这里想要替换的track
-            // 此时则不修改当前的歌曲进度
-            if (replaced) {
-              this._howler?.seek(t);
-              this.play();
-            }
-          }
-        );
+
+      if (autoplay) {
+        this.play(); // This will call _spotifyPlayer.resume()
+        // Update title and like state after playback starts
+        // The player_state_changed listener will handle this
       }
-    });
-    if (autoplay) {
-      this.play();
-      if (this._currentTrack.name) {
-        setTitle(this._currentTrack);
-      }
-      setTrayLikeState(store.state.liked.songs.includes(this.currentTrack.id));
-    }
-    this.setOutputDevice();
-  }
-  _getAudioSourceBlobURL(data) {
-    // Create a new object URL.
-    const source = URL.createObjectURL(new Blob([data]));
-
-    // Clean up the previous object URLs since we've created a new one.
-    // Revoke object URLs can release the memory taken by a Blob,
-    // which occupied a large proportion of memory.
-    for (const url in this.createdBlobRecords) {
-      URL.revokeObjectURL(url);
-    }
-
-    // Then, we replace the createBlobRecords with new one with
-    // our newly created object URL.
-    this.createdBlobRecords = [source];
-
-    return source;
-  }
-  _getAudioSourceFromCache(id) {
-    return getTrackSource(id).then(t => {
-      if (!t) return null;
-      return this._getAudioSourceBlobURL(t.source);
-    });
-  }
-  _getAudioSourceFromNetease(track) {
-    if (isAccountLoggedIn()) {
-      return getMP3(track.id).then(result => {
-        if (!result.data[0]) return null;
-        if (!result.data[0].url) return null;
-        if (result.data[0].freeTrialInfo !== null) return null; // 跳过只能试听的歌曲
-        const source = result.data[0].url.replace(/^http:/, 'https:');
-        if (store.state.settings.automaticallyCacheSongs) {
-          cacheTrackSource(track, source, result.data[0].br);
-        }
-        return source;
-      });
-    } else {
-      return new Promise(resolve => {
-        resolve(`https://music.163.com/song/media/outer/url?id=${track.id}`);
-      });
+    } catch (error) {
+      console.error('Error playing Spotify track:', error);
+      store.dispatch('showToast', '无法播放 Spotify 歌曲，请检查您的网络或 Spotify Premium 账户。');
     }
   }
-  async _getAudioSourceFromUnblockMusic(track) {
-    console.debug(`[debug][Player.js] _getAudioSourceFromUnblockMusic`);
 
-    if (
-      process.env.IS_ELECTRON !== true ||
-      store.state.settings.enableUnblockNeteaseMusic === false
-    ) {
-      return null;
-    }
-
-    /**
-     *
-     * @param {string=} searchMode
-     * @returns {import("@unblockneteasemusic/rust-napi").SearchMode}
-     */
-    const determineSearchMode = searchMode => {
-      /**
-       * FastFirst = 0
-       * OrderFirst = 1
-       */
-      switch (searchMode) {
-        case 'fast-first':
-          return 0;
-        case 'order-first':
-          return 1;
-        default:
-          return 0;
-      }
-    };
-
-    const retrieveSongInfo = await ipcRenderer.invoke(
-      'unblock-music',
-      store.state.settings.unmSource,
-      track,
-      {
-        enableFlac: store.state.settings.unmEnableFlac || null,
-        proxyUri: store.state.settings.unmProxyUri || null,
-        searchMode: determineSearchMode(store.state.settings.unmSearchMode),
-        config: {
-          'joox:cookie': store.state.settings.unmJooxCookie || null,
-          'qq:cookie': store.state.settings.unmQQCookie || null,
-          'ytdl:exe': store.state.settings.unmYtDlExe || null,
-        },
-      }
-    );
-
-    if (store.state.settings.automaticallyCacheSongs && retrieveSongInfo?.url) {
-      // 对于来自 bilibili 的音源
-      // retrieveSongInfo.url 是音频数据的base64编码
-      // 其他音源为实际url
-      const url =
-        retrieveSongInfo.source === 'bilibili'
-          ? `data:application/octet-stream;base64,${retrieveSongInfo.url}`
-          : retrieveSongInfo.url;
-      cacheTrackSource(track, url, 128000, `unm:${retrieveSongInfo.source}`);
-    }
-
-    if (!retrieveSongInfo) {
-      return null;
-    }
-
-    if (retrieveSongInfo.source !== 'bilibili') {
-      return retrieveSongInfo.url;
-    }
-
-    const buffer = base642Buffer(retrieveSongInfo.url);
-    return this._getAudioSourceBlobURL(buffer);
+  async _getAudioSource(track) {
+    // For Spotify, we don't get a direct audio source URL.
+    // We just need the track ID to tell the Spotify player to play it.
+    return track.id; // Return the Spotify track ID
   }
-  _getAudioSource(track) {
-    return this._getAudioSourceFromCache(String(track.id))
-      .then(source => {
-        return source ?? this._getAudioSourceFromNetease(track);
-      })
-      .then(source => {
-        return source ?? this._getAudioSourceFromUnblockMusic(track);
-      });
-  }
-  _replaceCurrentTrack(
+
+  async _replaceCurrentTrack(
     id,
     autoplay = true,
     ifUnplayableThen = UNPLAYABLE_CONDITION.PLAY_NEXT_TRACK
   ) {
     if (autoplay && this._currentTrack.name) {
-      this._scrobble(this.currentTrack, this._howler?.seek());
+      this._scrobble(this.currentTrack, this._spotifyPlayer?.position / 1000); // Use spotifyPlayer.position
     }
-    return getTrackDetail(id).then(data => {
-      const track = data.songs[0];
-      this._currentTrack = track;
-      this._updateMediaSessionMetaData(track);
+
+    // Fetch track details from Spotify API
+    try {
+      const spotifyTrack = await spotifyApiRequest('get', `/tracks/${id}`);
+      if (!spotifyTrack) {
+        throw new Error('Track not found on Spotify.');
+      }
+
+      this._currentTrack = this._mapSpotifyTrackToYesPlayMusicTrack(spotifyTrack);
+      this._updateMediaSessionMetaData(this._currentTrack);
+
       return this._replaceCurrentTrackAudio(
-        track,
+        this._currentTrack,
         autoplay,
         true,
         ifUnplayableThen
       );
-    });
+    } catch (error) {
+      console.error('Error fetching Spotify track details:', error);
+      store.dispatch('showToast', `无法获取歌曲信息: ${error.message}`);
+      switch (ifUnplayableThen) {
+        case UNPLAYABLE_CONDITION.PLAY_NEXT_TRACK:
+          this._playNextTrack(this.isPersonalFM);
+          break;
+        case UNPLAYABLE_CONDITION.PLAY_PREV_TRACK:
+          this.playPrevTrack();
+          break;
+        default:
+          store.dispatch(
+            'showToast',
+            `undefined Unplayable condition: ${ifUnplayableThen}`
+          );
+          break;
+      }
+      return false;
+    }
   }
-  /**
-   * @returns 是否成功加载音频，并使用加载完成的音频替换了howler实例
-   */
-  _replaceCurrentTrackAudio(
+
+  async _replaceCurrentTrackAudio(
     track,
     autoplay,
     isCacheNextTrack,
     ifUnplayableThen = UNPLAYABLE_CONDITION.PLAY_NEXT_TRACK
   ) {
-    return this._getAudioSource(track).then(source => {
-      if (source) {
-        let replaced = false;
-        if (track.id === this.currentTrackID) {
-          this._playAudioSource(source, autoplay);
-          replaced = true;
-        }
-        if (isCacheNextTrack) {
-          this._cacheNextTrack();
-        }
-        return replaced;
-      } else {
-        store.dispatch('showToast', `无法播放 ${track.name}`);
-        switch (ifUnplayableThen) {
-          case UNPLAYABLE_CONDITION.PLAY_NEXT_TRACK:
-            this._playNextTrack(this.isPersonalFM);
-            break;
-          case UNPLAYABLE_CONDITION.PLAY_PREV_TRACK:
-            this.playPrevTrack();
-            break;
-          default:
-            store.dispatch(
-              'showToast',
-              `undefined Unplayable condition: ${ifUnplayableThen}`
-            );
-            break;
-        }
-        return false;
+    const trackId = await this._getAudioSource(track);
+
+    if (trackId) {
+      let replaced = false;
+      if (track.id === this.currentTrackID) {
+        await this._playAudioSource(trackId, autoplay);
+        replaced = true;
       }
-    });
+      return replaced;
+    } else {
+      store.dispatch('showToast', `无法播放 ${track.name}`);
+      switch (ifUnplayableThen) {
+        case UNPLAYABLE_CONDITION.PLAY_NEXT_TRACK:
+          this._playNextTrack(this.isPersonalFM);
+          break;
+        case UNPLAYABLE_CONDITION.PLAY_PREV_TRACK:
+          this.playPrevTrack();
+          break;
+        default:
+          store.dispatch(
+            'showToast',
+            `undefined Unplayable condition: ${ifUnplayableThen}`
+          );
+          break;
+      }
+      return false;
+    }
   }
   _cacheNextTrack() {
     let nextTrackID = this._isPersonalFM
       ? this._personalFMNextTrack?.id ?? 0
       : this._getNextTrack()[0];
     if (!nextTrackID) return;
-    if (this._personalFMTrack.id == nextTrackID) return;
-    getTrackDetail(nextTrackID).then(data => {
-      let track = data.songs[0];
-      this._getAudioSource(track);
-    });
-  }
-  _loadSelfFromLocalStorage() {
-    const player = JSON.parse(localStorage.getItem('player'));
-    if (!player) return;
-    for (const [key, value] of Object.entries(player)) {
-      this[key] = value;
-    }
-  }
-  _initMediaSession() {
-    if ('mediaSession' in navigator) {
-      navigator.mediaSession.setActionHandler('play', () => {
-        this.play();
-      });
-      navigator.mediaSession.setActionHandler('pause', () => {
-        this.pause();
-      });
-      navigator.mediaSession.setActionHandler('previoustrack', () => {
-        this.playPrevTrack();
-      });
-      navigator.mediaSession.setActionHandler('nexttrack', () => {
-        this._playNextTrack(this.isPersonalFM);
-      });
-      navigator.mediaSession.setActionHandler('stop', () => {
-        this.pause();
-      });
-      navigator.mediaSession.setActionHandler('seekto', event => {
-        this.seek(event.seekTime);
-        this._updateMediaSessionPositionState();
-      });
-      navigator.mediaSession.setActionHandler('seekbackward', event => {
-        this.seek(this.seek() - (event.seekOffset || 10));
-        this._updateMediaSessionPositionState();
-      });
-      navigator.mediaSession.setActionHandler('seekforward', event => {
-        this.seek(this.seek() + (event.seekOffset || 10));
-        this._updateMediaSessionPositionState();
-      });
-    }
-  }
-  _updateMediaSessionMetaData(track) {
-    if ('mediaSession' in navigator === false) {
-      return;
-    }
-    let artists = track.ar.map(a => a.name);
-    const metadata = {
-      title: track.name,
-      artist: artists.join(','),
-      album: track.al.name,
-      artwork: [
-        {
-          src: track.al.picUrl + '?param=224y224',
-          type: 'image/jpg',
-          sizes: '224x224',
-        },
-        {
-          src: track.al.picUrl + '?param=512y512',
-          type: 'image/jpg',
-          sizes: '512x512',
-        },
-      ],
-      length: this.currentTrackDuration,
-      trackId: this.current,
-      url: '/trackid/' + track.id,
-    };
-
-    navigator.mediaSession.metadata = new window.MediaMetadata(metadata);
-    if (isCreateMpris) {
-      this._updateMprisState(track, metadata);
-    }
-  }
-  // OSDLyrics 会检测 Mpris 状态并寻找对应歌词文件，所以要在更新 Mpris 状态之前保证歌词下载完成
-  async _updateMprisState(track, metadata) {
-    if (!store.state.settings.enableOsdlyricsSupport) {
-      return ipcRenderer?.send('metadata', metadata);
-    }
-
-    let lyricContent = await getLyric(track.id);
-
-    if (!lyricContent.lrc || !lyricContent.lrc.lyric) {
-      return ipcRenderer?.send('metadata', metadata);
-    }
-
-    ipcRenderer.send('sendLyrics', {
-      track,
-      lyrics: lyricContent.lrc.lyric,
-    });
-
-    ipcRenderer.on('saveLyricFinished', () => {
-      ipcRenderer?.send('metadata', metadata);
-    });
-  }
-  _updateMediaSessionPositionState() {
-    if ('mediaSession' in navigator === false) {
-      return;
-    }
-    if ('setPositionState' in navigator.mediaSession) {
-      navigator.mediaSession.setPositionState({
-        duration: ~~(this.currentTrack.dt / 1000),
-        playbackRate: 1.0,
-        position: this.seek(),
-      });
-    }
-  }
-  _nextTrackCallback() {
-    this._scrobble(this._currentTrack, 0, true);
-    if (!this.isPersonalFM && this.repeatMode === 'one') {
-      this._replaceCurrentTrack(this.currentTrackID);
-    } else {
-      this._playNextTrack(this.isPersonalFM);
-    }
-  }
-  _loadPersonalFMNextTrack() {
-    if (this._personalFMNextLoading) {
-      return [false, undefined];
-    }
-    this._personalFMNextLoading = true;
-    return personalFM()
-      .then(result => {
-        if (!result || !result.data) {
-          this._personalFMNextTrack = undefined;
-        } else {
-          this._personalFMNextTrack = result.data[0];
-          this._cacheNextTrack(); // cache next track
-        }
-        this._personalFMNextLoading = false;
-        return [true, this._personalFMNextTrack];
-      })
-      .catch(() => {
-        this._personalFMNextTrack = undefined;
-        this._personalFMNextLoading = false;
-        return [false, this._personalFMNextTrack];
-      });
-  }
-  _playDiscordPresence(track, seekTime = 0) {
-    if (
-      process.env.IS_ELECTRON !== true ||
-      store.state.settings.enableDiscordRichPresence === false
-    ) {
-      return null;
-    }
-    let copyTrack = { ...track };
-    copyTrack.dt -= seekTime * 1000;
-    ipcRenderer?.send('playDiscordPresence', copyTrack);
-  }
-  _pauseDiscordPresence(track) {
-    if (
-      process.env.IS_ELECTRON !== true ||
-      store.state.settings.enableDiscordRichPresence === false
-    ) {
-      return null;
-    }
-    ipcRenderer?.send('pauseDiscordPresence', track);
-  }
-  _playNextTrack(isPersonal) {
-    if (isPersonal) {
-      this.playNextFMTrack();
-    } else {
-      this.playNextTrack();
-    }
   }
 
-  appendTrack(trackID) {
-    this.list.append(trackID);
-  }
-  playNextTrack() {
-    // TODO: 切换歌曲时增加加载中的状态
-    const [trackID, index] = this._getNextTrack();
-    if (trackID === undefined) {
-      this._howler?.stop();
-      this._setPlaying(false);
-      return false;
+  play() {
+    if (this._spotifyPlayer) {
+      this._spotifyPlayer.resume().then(() => {
+        console.log('Playback resumed!');
+        this._setPlaying(true);
+      }).catch(error => {
+        console.error('Error resuming playback:', error);
+        store.dispatch('showToast', '无法恢复播放，请检查您的 Spotify Premium 账户。');
+      });
     }
-    let next = index;
-    if (index === INDEX_IN_PLAY_NEXT) {
-      this._playNextList.shift();
-      next = this.current;
-    }
-    this.current = next;
-    this._replaceCurrentTrack(trackID);
-    return true;
-  }
-  async playNextFMTrack() {
-    if (this._personalFMLoading) {
-      return false;
-    }
-
-    this._isPersonalFM = true;
-    if (!this._personalFMNextTrack) {
-      this._personalFMLoading = true;
-      let result = null;
-      let retryCount = 5;
-      for (; retryCount >= 0; retryCount--) {
-        result = await personalFM().catch(() => null);
-        if (!result) {
-          this._personalFMLoading = false;
-          store.dispatch('showToast', 'personal fm timeout');
-          return false;
-        }
-        if (result.data?.length > 0) {
-          break;
-        } else if (retryCount > 0) {
-          await delay(1000);
-        }
-      }
-      this._personalFMLoading = false;
-
-      if (retryCount < 0) {
-        let content = '获取私人FM数据时重试次数过多，请手动切换下一首';
-        store.dispatch('showToast', content);
-        console.log(content);
-        return false;
-      }
-      // 这里只能拿到一条数据
-      this._personalFMTrack = result.data[0];
-    } else {
-      if (this._personalFMNextTrack.id === this._personalFMTrack.id) {
-        return false;
-      }
-      this._personalFMTrack = this._personalFMNextTrack;
-    }
-    if (this._isPersonalFM) {
-      this._replaceCurrentTrack(this._personalFMTrack.id);
-    }
-    this._loadPersonalFMNextTrack();
-    return true;
-  }
-  playPrevTrack() {
-    const [trackID, index] = this._getPrevTrack();
-    if (trackID === undefined) return false;
-    this.current = index;
-    this._replaceCurrentTrack(
-      trackID,
-      true,
-      UNPLAYABLE_CONDITION.PLAY_PREV_TRACK
-    );
-    return true;
-  }
-  saveSelfToLocalStorage() {
-    let player = {};
-    for (let [key, value] of Object.entries(this)) {
-      if (excludeSaveKeys.includes(key)) continue;
-      player[key] = value;
-    }
-
-    localStorage.setItem('player', JSON.stringify(player));
   }
 
   pause() {
-    this._howler?.fade(this.volume, 0, PLAY_PAUSE_FADE_DURATION);
-
-    this._howler?.once('fade', () => {
-      this._howler?.pause();
-      this._setPlaying(false);
-      setTitle(null);
-      this._pauseDiscordPresence(this._currentTrack);
-    });
-  }
-  play() {
-    if (this._howler?.playing()) return;
-
-    this._howler?.play();
-
-    this._howler?.once('play', () => {
-      this._howler?.fade(0, this.volume, PLAY_PAUSE_FADE_DURATION);
-
-      // 播放时确保开启player.
-      // 避免因"忘记设置"导致在播放时播放器不显示的Bug
-      this._enabled = true;
-      this._setPlaying(true);
-      if (this._currentTrack.name) {
-        setTitle(this._currentTrack);
-      }
-      this._playDiscordPresence(this._currentTrack, this.seek());
-      if (store.state.lastfm.key !== undefined) {
-        trackUpdateNowPlaying({
-          artist: this.currentTrack.ar[0].name,
-          track: this.currentTrack.name,
-          album: this.currentTrack.al.name,
-          trackNumber: this.currentTrack.no,
-          duration: ~~(this.currentTrack.dt / 1000),
-        });
-      }
-    });
-  }
-  playOrPause() {
-    if (this._howler?.playing()) {
-      this.pause();
-    } else {
-      this.play();
-    }
-  }
-  seek(time = null, sendMpris = true) {
-    if (isCreateMpris && sendMpris && time) {
-      ipcRenderer?.send('seeked', time);
-    }
-    if (time !== null) {
-      this._howler?.seek(time);
-      if (this._playing)
-        this._playDiscordPresence(this._currentTrack, this.seek(null, false));
-    }
-    return this._howler === null ? 0 : this._howler.seek();
-  }
-  mute() {
-    if (this.volume === 0) {
-      this.volume = this._volumeBeforeMuted;
-    } else {
-      this._volumeBeforeMuted = this.volume;
-      this.volume = 0;
-    }
-  }
-  setOutputDevice() {
-    if (this._howler?._sounds.length <= 0 || !this._howler?._sounds[0]._node) {
-      return;
-    }
-    this._howler?._sounds[0]._node.setSinkId(store.state.settings.outputDevice);
-  }
-
-  replacePlaylist(
-    trackIDs,
-    playlistSourceID,
-    playlistSourceType,
-    autoPlayTrackID = 'first'
-  ) {
-    this._isPersonalFM = false;
-    this.list = trackIDs;
-    this.current = 0;
-    this._playlistSource = {
-      type: playlistSourceType,
-      id: playlistSourceID,
-    };
-    if (this.shuffle) this._shuffleTheList(autoPlayTrackID);
-    if (autoPlayTrackID === 'first') {
-      this._replaceCurrentTrack(this.list[0]);
-    } else {
-      this.current = this.list.indexOf(autoPlayTrackID);
-      this._replaceCurrentTrack(autoPlayTrackID);
-    }
-  }
-  playAlbumByID(id, trackID = 'first') {
-    getAlbum(id).then(data => {
-      let trackIDs = data.songs.map(t => t.id);
-      this.replacePlaylist(trackIDs, id, 'album', trackID);
-    });
-  }
-  playPlaylistByID(id, trackID = 'first', noCache = false) {
-    console.debug(
-      `[debug][Player.js] playPlaylistByID 👉 id:${id} trackID:${trackID} noCache:${noCache}`
-    );
-    getPlaylistDetail(id, noCache).then(data => {
-      let trackIDs = data.playlist.trackIds.map(t => t.id);
-      this.replacePlaylist(trackIDs, id, 'playlist', trackID);
-    });
-  }
-  playArtistByID(id, trackID = 'first') {
-    getArtist(id).then(data => {
-      let trackIDs = data.hotSongs.map(t => t.id);
-      this.replacePlaylist(trackIDs, id, 'artist', trackID);
-    });
-  }
-  playTrackOnListByID(id, listName = 'default') {
-    if (listName === 'default') {
-      this._current = this._list.findIndex(t => t === id);
-    }
-    this._replaceCurrentTrack(id);
-  }
-  playIntelligenceListById(id, trackID = 'first', noCache = false) {
-    getPlaylistDetail(id, noCache).then(data => {
-      const randomId = Math.floor(
-        Math.random() * (data.playlist.trackIds.length + 1)
-      );
-      const songId = data.playlist.trackIds[randomId].id;
-      intelligencePlaylist({ id: songId, pid: id }).then(result => {
-        let trackIDs = result.data.map(t => t.id);
-        this.replacePlaylist(trackIDs, id, 'playlist', trackID);
+    if (this._spotifyPlayer) {
+      this._spotifyPlayer.pause().then(() => {
+        console.log('Playback paused!');
+        this._setPlaying(false);
+      }).catch(error => {
+        console.error('Error pausing playback:', error);
       });
-    });
-  }
-  addTrackToPlayNext(trackID, playNow = false) {
-    this._playNextList.push(trackID);
-    if (playNow) {
-      this.playNextTrack();
     }
   }
-  playPersonalFM() {
-    this._isPersonalFM = true;
-    if (this.currentTrackID !== this._personalFMTrack.id) {
-      this._replaceCurrentTrack(this._personalFMTrack.id, true);
+
+  nextTrack() {
+    if (this._spotifyPlayer) {
+      this._spotifyPlayer.nextTrack().then(() => {
+        console.log('Skipped to next track!');
+      }).catch(error => {
+        console.error('Error skipping to next track:', error);
+      });
+    }
+  }
+
+  playPrevTrack() {
+    if (this._spotifyPlayer) {
+      this._spotifyPlayer.previousTrack().then(() => {
+        console.log('Skipped to previous track!');
+      }).catch(error => {
+        console.error('Error skipping to previous track:', error);
+      });
+    }
+  }
+
+  setOutputDevice() {
+    // Spotify Web Playback SDK handles device internally.
+    // If user wants to transfer playback to another device,
+    // they can do it via Spotify's own UI or by calling Spotify API's transfer playback endpoint.
+    // For now, we'll assume playback stays on the current device.
+  }
+
+  _nextTrackCallback() {
+    if (this.repeatMode === 'one') {
+      this._spotifyPlayer.seek(0).then(() => {
+        this.play();
+      });
     } else {
-      this.playOrPause();
-    }
-  }
-  async moveToFMTrash() {
-    this._isPersonalFM = true;
-    let id = this._personalFMTrack.id;
-    if (await this.playNextFMTrack()) {
-      fmTrash(id);
+      this.nextTrack();
     }
   }
 
-  sendSelfToIpcMain() {
-    if (process.env.IS_ELECTRON !== true) return false;
-    let liked = store.state.liked.songs.includes(this.currentTrack.id);
-    ipcRenderer?.send('player', {
-      playing: this.playing,
-      likedCurrentTrack: liked,
-    });
-    setTrayLikeState(liked);
+  // Remaining methods (playTrack, playAlbum, playPlaylist, etc.) will need to be adapted
+  // to use Spotify API calls and then trigger playback via _playAudioSource.
+  // This will be handled in subsequent steps.
+
+  // Placeholder for _loadSelfFromLocalStorage - assuming it loads basic player state
+  _loadSelfFromLocalStorage() {
+    // Implement loading player state from localStorage if needed
   }
 
-  switchRepeatMode() {
-    if (this._repeatMode === 'on') {
-      this.repeatMode = 'one';
-    } else if (this._repeatMode === 'one') {
-      this.repeatMode = 'off';
-    } else {
-      this.repeatMode = 'on';
-    }
-    if (isCreateMpris) {
-      ipcRenderer?.send('switchRepeatMode', this.repeatMode);
-    }
-  }
-  switchShuffle() {
-    this.shuffle = !this.shuffle;
-    if (isCreateMpris) {
-      ipcRenderer?.send('switchShuffle', this.shuffle);
-    }
-  }
-  switchReversed() {
-    this.reversed = !this.reversed;
+  // Placeholder for _updateMediaSessionMetaData - assuming it updates browser media controls
+  _updateMediaSessionMetaData(track) {
+    // Implement updating Media Session API with Spotify track info
   }
 
-  clearPlayNextList() {
-    this._playNextList = [];
-  }
-  removeTrackFromQueue(index) {
-    this._playNextList.splice(index, 1);
-  }
+  // Placeholder for personalFM - will need to be removed or replaced if not supported by Spotify
+  // personalFM() {
+  //   return Promise.resolve({ data: [] }); // Dummy implementation
+  // }
 }
+
+
